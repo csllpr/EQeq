@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <vector>
 #include <map>             // For string enumeration (C++ specific)
+#include <cctype>
 #include <cmath>           // For basic math functions
 #include <cstdlib>
 using namespace std;
@@ -88,6 +89,13 @@ double Mag(vector<double> a);
 double Round(double num);
 vector<double> Scalar(double a, vector<double> b);
 vector<double> SolveMatrix(vector<vector<double> > A, vector<double> b);
+string Trim(const string &value);
+bool StartsWith(const string &value, const string &prefix);
+vector<string> TokenizeCIFLine(const string &line);
+bool GetCIFScalarValue(const vector<string> &lines, const string &tag, double &value);
+string NormalizeAtomSymbol(const string &rawSymbol);
+void AppendCIFAtom(const vector<string> &tokens, int labelIndex, int symbolIndex,
+    int xIndex, int yIndex, int zIndex);
 
 // Global variables
 bool isPeriodic = true;
@@ -189,9 +197,10 @@ char *run(const char *data, const char *outputType, double _lambda, float _hI0,
     X.clear();
     Label.clear();
     Symbol.clear();
+    Q.clear();
 
     // Quick hack. If the string ends in ".cif", it's a file. Else, it's data.
-    if (input.substr(input.length() - 4) == ".cif") {
+    if (input.length() >= 4 && input.compare(input.length() - 4, 4, ".cif") == 0) {
         LoadCIFFile(input);
         inputFilename = input;
     } else {
@@ -592,6 +601,166 @@ double GetJ(int i, int j) {
     }
 }
 /*****************************************************************************/
+string Trim(const string &value) {
+    size_t start = value.find_first_not_of(" \t\r");
+    if (start == string::npos) {
+        return "";
+    }
+
+    size_t end = value.find_last_not_of(" \t\r");
+    return value.substr(start, end - start + 1);
+}
+/*****************************************************************************/
+bool StartsWith(const string &value, const string &prefix) {
+    return value.compare(0, prefix.length(), prefix) == 0;
+}
+/*****************************************************************************/
+vector<string> TokenizeCIFLine(const string &line) {
+    vector<string> tokens;
+    string token;
+    char quote = '\0';
+
+    for (size_t i = 0; i < line.size(); i++) {
+        char ch = line[i];
+
+        if (quote != '\0') {
+            if (ch == quote) {
+                quote = '\0';
+            } else {
+                token += ch;
+            }
+            continue;
+        }
+
+        if ((ch == '\'' || ch == '"') && token.empty()) {
+            quote = ch;
+            continue;
+        }
+
+        if (ch == '#') {
+            break;
+        }
+
+        if (isspace(static_cast<unsigned char>(ch))) {
+            if (!token.empty()) {
+                tokens.push_back(token);
+                token.clear();
+            }
+            continue;
+        }
+
+        token += ch;
+    }
+
+    if (!token.empty()) {
+        tokens.push_back(token);
+    }
+
+    return tokens;
+}
+/*****************************************************************************/
+bool GetCIFScalarValue(const vector<string> &lines, const string &tag, double &value) {
+    for (size_t i = 0; i < lines.size(); i++) {
+        string trimmed = Trim(lines[i]);
+        if (trimmed.empty() || trimmed[0] == '#') {
+            continue;
+        }
+
+        vector<string> tokens = TokenizeCIFLine(trimmed);
+        if (tokens.size() >= 2 && tokens[0] == tag) {
+            value = atof(tokens[1].c_str());
+            return true;
+        }
+    }
+
+    return false;
+}
+/*****************************************************************************/
+string NormalizeAtomSymbol(const string &rawSymbol) {
+    string letters;
+
+    for (size_t i = 0; i < rawSymbol.size(); i++) {
+        unsigned char ch = static_cast<unsigned char>(rawSymbol[i]);
+        if (isalpha(ch)) {
+            letters += rawSymbol[i];
+            if (letters.size() == 2) {
+                break;
+            }
+        } else if (!letters.empty()) {
+            break;
+        }
+    }
+
+    if (letters.empty()) {
+        return "";
+    }
+
+    string normalized;
+    normalized += static_cast<char>(toupper(static_cast<unsigned char>(letters[0])));
+    if (letters.size() > 1) {
+        normalized += static_cast<char>(tolower(static_cast<unsigned char>(letters[1])));
+    }
+    if (normalized.size() == 1) {
+        normalized += ' ';
+    }
+
+    return normalized;
+}
+/*****************************************************************************/
+void AppendCIFAtom(const vector<string> &tokens, int labelIndex, int symbolIndex,
+        int xIndex, int yIndex, int zIndex) {
+    Coordinates tempAtom;
+    string normalizedSymbol = NormalizeAtomSymbol(tokens[symbolIndex]);
+    map<string, StringAtomLabels>::const_iterator atomIt = s_mapStringAtomLabels.find(normalizedSymbol);
+
+    if (normalizedSymbol.empty() || atomIt == s_mapStringAtomLabels.end()) {
+        cerr << "Unsupported atom symbol in CIF atom loop: " << tokens[symbolIndex] << endl;
+        exit(1);
+    }
+
+    Label.push_back(tokens[labelIndex]);
+    Symbol.push_back(normalizedSymbol);
+
+    double fracX = atof(tokens[xIndex].c_str());
+    double fracY = atof(tokens[yIndex].c_str());
+    double fracZ = atof(tokens[zIndex].c_str());
+
+    tempAtom.x = fracX * aV[0] + fracY * bV[0] + fracZ * cV[0];
+    tempAtom.y = fracX * aV[1] + fracY * bV[1] + fracZ * cV[1];
+    tempAtom.z = fracX * aV[2] + fracY * bV[2] + fracZ * cV[2];
+
+    Pos.push_back(tempAtom);
+
+    int i = Symbol.size() - 1;
+    int Z = atomIt->second;
+
+    if (Symbol[i] == "H ") {
+        X.push_back(0.5*(hI1 + hI0));
+        J.push_back(hI1 - hI0);
+    } else {
+        int cC = IonizationData[Z].chargeCenter;
+        X.push_back(0.5*(IonizationData[Z].ionizationPotential[cC+1] +
+            IonizationData[Z].ionizationPotential[cC]));
+        J.push_back(IonizationData[Z].ionizationPotential[cC+1] -
+            IonizationData[Z].ionizationPotential[cC]);
+        X[i] -= cC*(J[i]);
+    }
+
+    bool beenDone = false;
+    for (int j = 0; j < i; j++) {
+        if (Symbol[i] == Symbol[j]) {
+            beenDone = true;
+        }
+    }
+    if (beenDone == false) {
+        cerr << Symbol[i] << "\t";
+        cerr << "Z: " << Z+1 << "\t";
+        cerr << "Ch. Cent: " << IonizationData[Z].chargeCenter << "\t";
+        cerr << "X: " << X[i] << "\t";
+        cerr << "J: " << J[i] << "\t" << endl;
+    }
+}
+/*****************************************************************************/
 void LoadChargeCenters(const char *filename) {
     // Loads charge centers to be used, atoms are assumed to be
 
@@ -718,41 +887,27 @@ void LoadCIFFile(string filename) {
 }
 /*****************************************************************************/
 void LoadCIFData(string data) {
-    string cStr; // current string
-    string tStr; // temp string
-    int sInd = 0, eInd = 0, iInd = 0;
+    vector<string> lines;
+    string line;
+    stringstream dataStream(data);
+    bool cellOK = true;
 
-    // Read in unit cell dimensions
-    sInd = data.find("_cell_length_a") + 15;
-    eInd = data.find("\n", sInd);
-    cStr = data.substr(sInd, eInd - sInd); // Read in the number of atoms in the file
-    aLength = atof( cStr.c_str() );
+    while (getline(dataStream, line)) {
+        lines.push_back(line);
+    }
 
-    sInd = data.find("_cell_length_b") + 15;
-    eInd = data.find("\n", sInd);
-    cStr = data.substr(sInd, eInd - sInd); // Read in the number of atoms in the file
-    bLength = atof( cStr.c_str() );
+    // Read in unit cell dimensions and angles
+    cellOK = cellOK && GetCIFScalarValue(lines, "_cell_length_a", aLength);
+    cellOK = cellOK && GetCIFScalarValue(lines, "_cell_length_b", bLength);
+    cellOK = cellOK && GetCIFScalarValue(lines, "_cell_length_c", cLength);
+    cellOK = cellOK && GetCIFScalarValue(lines, "_cell_angle_alpha", alphaAngle);
+    cellOK = cellOK && GetCIFScalarValue(lines, "_cell_angle_beta", betaAngle);
+    cellOK = cellOK && GetCIFScalarValue(lines, "_cell_angle_gamma", gammaAngle);
 
-    sInd = data.find("_cell_length_c") + 15;
-    eInd = data.find("\n", sInd);
-    cStr = data.substr(sInd, eInd - sInd); // Read in the number of atoms in the file
-    cLength = atof( cStr.c_str() );
-
-    // Read in unit cell angles
-    sInd = data.find("_cell_angle_alpha") + 18;
-    eInd = data.find("\n", sInd);
-    cStr = data.substr(sInd, eInd - sInd); // Read in the number of atoms in the file
-    alphaAngle = atof( cStr.c_str() );
-
-    sInd = data.find("_cell_angle_beta") + 17;
-    eInd = data.find("\n", sInd);
-    cStr = data.substr(sInd, eInd - sInd); // Read in the number of atoms in the file
-    betaAngle = atof( cStr.c_str() );
-
-    sInd = data.find("_cell_angle_gamma") + 18;
-    eInd = data.find("\n", sInd);
-    cStr = data.substr(sInd, eInd - sInd); // Read in the number of atoms in the file
-    gammaAngle = atof( cStr.c_str() );
+    if (!cellOK) {
+        cerr << "Unable to read required unit cell data from CIF input." << endl;
+        exit(1);
+    }
 
     // Convert to radians
     alphaAngle *= (PI / 180.0);
@@ -774,110 +929,96 @@ void LoadCIFData(string data) {
     crs = Cross(bV,cV);
     unitCellVolume = fabs( aV[0]*crs[0] + aV[1]*crs[1] + aV[2]*crs[2] ); // Volume of a parallelipiped
 
-    // Find first line that does not contain underscore
-    bool underscoreFound = true;
-    int eInd2 = eInd; // we need another index
-    while (underscoreFound == true) {
-        sInd = eInd2; // End of the previous line
-        eInd2 = data.find("\n", eInd2 + 1); // End of the next line
-        cStr = data.substr(sInd, eInd2 - sInd); // The line
-        if ((cStr.find("_",0) >=0 && cStr.find("_",0) < cStr.size()) || cStr.length() < 20) {
-            underscoreFound = true; // Under score found, skip to the next line
-        } else {
-            // Underscore not found, we are on a legitimate line of data
-            underscoreFound = false;
-        }
-    }
-
     cerr << "==================================================" << endl;
     cerr << "========= Atom types - X & J values used =========" << endl;
     cerr << "==================================================" << endl;
 
-    Coordinates tempAtom;
-    while (underscoreFound == false) {
-        if ((cStr.find("_",0) >=0) && (cStr.find("_",0) < cStr.size())) {
-            underscoreFound = true; // Under score found, skip to the next line
-        } else {
-            // Underscore not found, we are on a legitimate line of data
-            underscoreFound = false;
+    bool atomLoopFound = false;
+    for (size_t i = 0; i < lines.size(); i++) {
+        string trimmed = Trim(lines[i]);
+        if (trimmed != "loop_") {
+            continue;
+        }
 
-            //Read atom label
-            iInd = cStr.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 0);
-            sInd = cStr.find_first_of(" \t", iInd);
+        vector<string> headers;
+        size_t j = i + 1;
+        while (j < lines.size()) {
+            string headerLine = Trim(lines[j]);
+            if (headerLine.empty() || headerLine[0] == '#') {
+                j++;
+                continue;
+            }
 
-            // Handles cases where EOF is hit before underscore found
-            if (sInd == string::npos) {
+            if (headerLine[0] != '_') {
                 break;
             }
 
-            tStr = cStr.substr(iInd, sInd-1);
-            Label.push_back(tStr);
-
-            // Read atom symbol
-            sInd = cStr.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ", sInd);
-            eInd = sInd + 1;
-            tStr = cStr.substr(sInd, eInd - sInd + 1);
-            Symbol.push_back(tStr);
-
-            // Find first "x" coordinate
-            sInd = cStr.find(".",sInd) - 2;
-            eInd = cStr.find_first_of(" \t",sInd + 2);
-            tStr = cStr.substr(sInd, eInd - sInd);
-            tempAtom.x = atof( tStr.c_str() );    // X Position
-
-            // Find first "y" coordinate
-            sInd = cStr.find(".",eInd) - 2;
-            eInd = cStr.find_first_of(" \t",sInd + 2);
-            tStr = cStr.substr(sInd, eInd - sInd);
-            tempAtom.y = atof( tStr.c_str() );    // Y Position
-
-            // Find first "z" coordinate
-            sInd = cStr.find(".",eInd) - 2;
-            eInd = cStr.find_first_of(" \t\n",sInd + 2);
-            tStr = cStr.substr(sInd, eInd - sInd);
-            tempAtom.z = atof( tStr.c_str() );    // Z Position
-
-            // Change from fractional to cartesian:
-            tempAtom.x = tempAtom.x * aV[0] + tempAtom.y * bV[0] + tempAtom.z * cV[0];
-            tempAtom.y = tempAtom.x * aV[1] + tempAtom.y * bV[1] + tempAtom.z * cV[1];
-            tempAtom.z = tempAtom.x * aV[2] + tempAtom.y * bV[2] + tempAtom.z * cV[2];
-
-            Pos.push_back(tempAtom);
-
-            int i = Symbol.size() - 1;
-            int Z = s_mapStringAtomLabels[Symbol[i]]; // Get Z number from label
-
-            if (Symbol[i] == "H ") {
-                X.push_back(0.5*(hI1 + hI0));
-                J.push_back(hI1 - hI0);
-            } else {
-                int cC = IonizationData[Z].chargeCenter;
-                X.push_back(0.5*(IonizationData[Z].ionizationPotential[cC+1] +
-                    IonizationData[Z].ionizationPotential[cC]));
-                J.push_back(IonizationData[Z].ionizationPotential[cC+1] -
-                    IonizationData[Z].ionizationPotential[cC]);
-                X[i] -= cC*(J[i]);
+            vector<string> headerTokens = TokenizeCIFLine(headerLine);
+            if (!headerTokens.empty()) {
+                headers.push_back(headerTokens[0]);
             }
+            j++;
+        }
 
-            bool beenDone = false;
-            for (int j = 0; j < i; j++) {
-                if (Symbol[i] == Symbol[j]) beenDone = true;
-            }
-            if (beenDone == false) {
-                cerr << Symbol[i] << "\t";
-                cerr << "Z: " << Z+1 << "\t";
-                cerr << "Ch. Cent: " << IonizationData[Z].chargeCenter << "\t";
-                cerr << "X: " << X[i] << "\t";
-                cerr << "J: " << J[i] << "\t" << endl;
+        if (headers.empty()) {
+            continue;
+        }
+
+        int labelIndex = -1;
+        int symbolIndex = -1;
+        int xIndex = -1;
+        int yIndex = -1;
+        int zIndex = -1;
+        for (size_t h = 0; h < headers.size(); h++) {
+            if (headers[h] == "_atom_site_label") {
+                labelIndex = static_cast<int>(h);
+            } else if (headers[h] == "_atom_site_type_symbol") {
+                symbolIndex = static_cast<int>(h);
+            } else if (headers[h] == "_atom_site_fract_x") {
+                xIndex = static_cast<int>(h);
+            } else if (headers[h] == "_atom_site_fract_y") {
+                yIndex = static_cast<int>(h);
+            } else if (headers[h] == "_atom_site_fract_z") {
+                zIndex = static_cast<int>(h);
             }
         }
-        sInd = eInd2; // End of the previous line
-        eInd2 = data.find("\n", eInd2 + 1); // End of the next line
-        if (eInd2 == -1) {
-            break;
+
+        if (labelIndex < 0 || symbolIndex < 0 || xIndex < 0 || yIndex < 0 || zIndex < 0) {
+            i = j;
+            continue;
         }
-        cStr = data.substr(sInd, eInd2 - sInd); // The line
+
+        atomLoopFound = true;
+        while (j < lines.size()) {
+            string atomLine = Trim(lines[j]);
+            if (atomLine.empty() || atomLine[0] == '#') {
+                j++;
+                continue;
+            }
+
+            if (atomLine == "loop_" || atomLine[0] == '_' ||
+                    StartsWith(atomLine, "data_") || StartsWith(atomLine, "save_")) {
+                break;
+            }
+
+            vector<string> tokens = TokenizeCIFLine(atomLine);
+            if (tokens.size() < headers.size()) {
+                cerr << "Skipping malformed CIF atom row: " << atomLine << endl;
+                j++;
+                continue;
+            }
+
+            AppendCIFAtom(tokens, labelIndex, symbolIndex, xIndex, yIndex, zIndex);
+            j++;
+        }
+        break;
     }
+
+    if (!atomLoopFound || Pos.empty()) {
+        cerr << "Unable to read atom coordinates from CIF input." << endl;
+        exit(1);
+    }
+
     numAtoms = Pos.size();
     Q.resize(numAtoms, 0); // initialize charges to zero
 }
