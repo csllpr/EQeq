@@ -18,6 +18,8 @@
 #include <cctype>
 #include <cmath>           // For basic math functions
 #include <cstdlib>
+#include <limits.h>
+#include <unistd.h>
 using namespace std;
 
 #define TABLE_OF_ELEMENTS_SIZE 84
@@ -89,6 +91,12 @@ double Mag(vector<double> a);
 double Round(double num);
 vector<double> Scalar(double a, vector<double> b);
 vector<double> SolveMatrix(vector<vector<double> > A, vector<double> b);
+string Dirname(const string &path);
+string GetExecutableDirectory(const char *argv0);
+string GetEnvOverride(const vector<string> &names);
+string JoinPath(const string &left, const string &right);
+string ResolveDataFilePath(const string &userPath, const string &executableDirectory,
+    const string &filename, const vector<string> &envNames);
 string Trim(const string &value);
 bool StartsWith(const string &value, const string &prefix);
 vector<string> TokenizeCIFLine(const string &line);
@@ -141,6 +149,12 @@ char *run(const char *data, const char *outputType, double _lambda, float _hI0,
 /*****************************************************************************/
 
 int main (int argc, char *argv[]) {
+    vector<string> ionizationEnvNames;
+    vector<string> chargeCentersEnvNames;
+    string executableDirectory;
+    string ionizationArg;
+    string chargeCentersArg;
+
     if (argc <= 1) { cerr << "Error, invalid input!" << endl; exit(1); }
     if (argc > 2) lambda = atof(argv[2]); // The dielectric screening parameter (optional, default value above)
     if (argc > 3) hI0 = atof(argv[3]); // The electron affinity of hydrogen (optional, default value above)
@@ -149,9 +163,25 @@ int main (int argc, char *argv[]) {
     if (argc > 6) mR = atoi(argv[6]);
     if (argc > 7) mK = atoi(argv[7]);
     if (argc > 8) eta = atof(argv[8]);
-    if (argc > 9) ionizationDataFilename = argv[9];
-    if (argc > 10) chargeCentersFilename = argv[10];
     if (argc > 10) eta = atof(argv[8]);
+
+    executableDirectory = GetExecutableDirectory(argv[0]);
+    ionizationArg = (argc > 9) ? argv[9] : "";
+    chargeCentersArg = (argc > 10) ? argv[10] : "";
+
+    ionizationEnvNames.push_back("EQEQ_IONIZATION_DATA_PATH");
+    ionizationEnvNames.push_back("EQEQ_IONIZATIONDATA");
+    ionizationEnvNames.push_back("IONIZATIONDATA");
+    ionizationEnvNames.push_back("ionizationdata");
+    chargeCentersEnvNames.push_back("EQEQ_CHARGE_CENTERS_PATH");
+    chargeCentersEnvNames.push_back("EQEQ_CHARGECENTERS");
+    chargeCentersEnvNames.push_back("CHARGECENTERS");
+    chargeCentersEnvNames.push_back("chargecenters");
+
+    ionizationDataFilename = ResolveDataFilePath(
+        ionizationArg, executableDirectory, "ionizationdata.dat", ionizationEnvNames);
+    chargeCentersFilename = ResolveDataFilePath(
+        chargeCentersArg, executableDirectory, "chargecenters.dat", chargeCentersEnvNames);
 
     // The only mandatory parameter is the input file/stream parameter
     run(argv[1], (const char *)"files", lambda, hI0, chargePrecision, method.c_str(),
@@ -599,6 +629,78 @@ double GetJ(int i, int j) {
         cerr << "Serious error specifying periodic boundary conditions. Exiting" << endl;
         exit(1);
     }
+}
+/*****************************************************************************/
+string Dirname(const string &path) {
+    size_t slashIndex = path.find_last_of("/\\");
+
+    if (slashIndex == string::npos) {
+        return ".";
+    }
+    if (slashIndex == 0) {
+        return path.substr(0, 1);
+    }
+
+    return path.substr(0, slashIndex);
+}
+/*****************************************************************************/
+string GetExecutableDirectory(const char *argv0) {
+    char executablePath[PATH_MAX];
+    char resolvedPath[PATH_MAX];
+    ssize_t executableLength = readlink("/proc/self/exe", executablePath, sizeof(executablePath) - 1);
+
+    if (executableLength > 0) {
+        executablePath[executableLength] = '\0';
+        return Dirname(string(executablePath));
+    }
+
+    if (argv0 != NULL && strchr(argv0, '/') != NULL) {
+        if (realpath(argv0, resolvedPath) != NULL) {
+            return Dirname(string(resolvedPath));
+        }
+        return Dirname(string(argv0));
+    }
+
+    return ".";
+}
+/*****************************************************************************/
+string GetEnvOverride(const vector<string> &names) {
+    for (size_t i = 0; i < names.size(); i++) {
+        const char *value = getenv(names[i].c_str());
+        if (value != NULL && value[0] != '\0') {
+            return string(value);
+        }
+    }
+
+    return "";
+}
+/*****************************************************************************/
+string JoinPath(const string &left, const string &right) {
+    if (left.empty()) {
+        return right;
+    }
+    if (right.empty()) {
+        return left;
+    }
+    if (left[left.size() - 1] == '/') {
+        return left + right;
+    }
+
+    return left + "/" + right;
+}
+/*****************************************************************************/
+string ResolveDataFilePath(const string &userPath, const string &executableDirectory,
+        const string &filename, const vector<string> &envNames) {
+    string envPath = GetEnvOverride(envNames);
+
+    if (!userPath.empty()) {
+        return userPath;
+    }
+    if (!envPath.empty()) {
+        return envPath;
+    }
+
+    return JoinPath(JoinPath(executableDirectory, "data"), filename);
 }
 /*****************************************************************************/
 string Trim(const string &value) {

@@ -11,10 +11,10 @@ Modified version, which allows to specify additional parameters:
  * `mR` (default: 2) Number of "expansion" unit cells to consider in periodic calculation ("real space"). 2 => 5x5x5
  * `mK` (default: 2) Number of "expansion" unit cells to consider in periodic calculation ("frequency space"). 2 => 5x5x5
  * `eta` (default: 50) Ewald splitting parameter
- * `ionizationdata` (default: [ionizationdata.dat](data/ionizationdata.dat)) File with ionization potentials and electron affinities. Default data are  
+ * `ionizationdata` (default: `data/ionizationdata.dat` relative to the executable, overridden by `EQEQ_IONIZATION_DATA_PATH`) File with ionization potentials and electron affinities. Default data are  
    EA: experimental, [T.Andersen et al., 1999](http://aip.scitation.org/doi/10.1063/1.556047)  
    IP: experimental, [C.E.Moore, 1970](https://nvlpubs.nist.gov/nistpubs/Legacy/NSRDS/nbsnsrds34.pdf)
- * `chargecenters` (default: [chargecenters.dat](data/chargecenters.dat)) File with common oxidation states (lowered, if missing ionizationdata)
+ * `chargecenters` (default: `data/chargecenters.dat` relative to the executable, overridden by `EQEQ_CHARGE_CENTERS_PATH`) File with common oxidation states (lowered, if missing ionizationdata)
 
 ### Usage
 
@@ -47,9 +47,10 @@ features to the source code to fit the particular needs of your project.
 
 #### Running the program:
 
-Program expects two input files `ionization.dat` and `chargecenters.dat`. Please
-look at source code to see what the other optional inputs are for (should be
-mostly self-explanatory). Compile with something like:
+Program reads `data/ionizationdata.dat` and `data/chargecenters.dat` relative
+to the `eqeq` executable by default. `EQEQ_IONIZATION_DATA_PATH` and
+`EQEQ_CHARGE_CENTERS_PATH` override those defaults, and explicit CLI arguments
+still take precedence. Compile with something like:
 
 ```
 g++ main.cpp -O3 -o eqeq

@@ -26,8 +26,25 @@ eqeq.run.argtypes = (c_char_p, c_char_p, c_double, c_float, c_int, c_char_p,
 eqeq.run.restype = c_char_p
 
 ROOT = os.path.normpath(os.path.dirname(__file__))
-DEFAULT_IONIZATION_PATH = os.path.join(ROOT, "ionizationdata.dat")
-DEFAULT_CHARGE_PATH = os.path.join(ROOT, "chargecenters.dat")
+DATA_ROOT = os.path.join(ROOT, "data")
+
+
+def _get_env_override(*names):
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+DEFAULT_IONIZATION_PATH = (_get_env_override(
+    "EQEQ_IONIZATION_DATA_PATH", "EQEQ_IONIZATIONDATA",
+    "IONIZATIONDATA", "ionizationdata") or
+    os.path.join(DATA_ROOT, "ionizationdata.dat"))
+DEFAULT_CHARGE_PATH = (_get_env_override(
+    "EQEQ_CHARGE_CENTERS_PATH", "EQEQ_CHARGECENTERS",
+    "CHARGECENTERS", "chargecenters") or
+    os.path.join(DATA_ROOT, "chargecenters.dat"))
 
 
 def run(structure, input_type="cif", output_type="cif", l=1.2, h_i0=-2.0,
@@ -56,11 +73,11 @@ def run(structure, input_type="cif", output_type="cif", l=1.2, h_i0=-2.0,
             This is measured radially, so m_k = 1 evaluates 27 unit cells.
         eta: (Optional) Ewald splitting parameter
         ionization_data_path: (Optional) A path to the file containing ion-
-            ization data. By default, assumes the data is in the EQeq folder
-            and saved as "ionizationdata.dat".
+            ization data. By default, assumes the data is in the EQeq data
+            folder and saved as "ionizationdata.dat".
         charge_data_path: (Optional) A path to the file containing charge-
-            center data. By default, assumes the data is in the EQeq folder
-            and saved as "chargecenters.dat".
+            center data. By default, assumes the data is in the EQeq data
+            folder and saved as "chargecenters.dat".
     Returns:
         A string representing the charged crystal. Returns nothing if the
         output type is set to "files"
@@ -125,12 +142,12 @@ if __name__ == "__main__":
     parser.add_argument("--ionization-data-path", type=str,
                         default=DEFAULT_IONIZATION_PATH, help="A path to the "
                         "file containing ionization data. By default, assumes "
-                        "the data is in the EQeq folder and saved as "
+                        "the data is in the EQeq data folder and saved as "
                         "'ionizationdata.dat'")
     parser.add_argument("--charge-data-path", type=str,
                         default=DEFAULT_CHARGE_PATH, help="A path to the file "
                         "containing charge-center data. By default, assumes "
-                        "the data is in the EQeq folder and saved as "
+                        "the data is in the EQeq data folder and saved as "
                         "'chargecenters.dat'")
     args = parser.parse_args()
 
